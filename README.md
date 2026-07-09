@@ -1,339 +1,210 @@
-# feishu-agent-bridge
+# raft-feishu-bridge
 
-A lightweight bridge that subscribes to [Feishu (Lark)](https://www.feishu.cn) IM events via WebSocket and forwards them to any AI agent framework — Claude Code, Hermes, custom webhooks, or anything that can read JSON from stdin.
+A lightweight Feishu (Lark) ↔ Raft bridge.
 
-## How it works
+The bridge keeps Feishu Open Platform details in one place and uses a Raft
+external-agent profile for the Raft side. It replaces legacy machine-key /
+`SLOCK_AGENT_TOKEN_FILE` bootstrapping with `raft agent login` + `RAFT_PROFILE`.
 
-```
-Feishu User
-    │ sends message
-    ▼
-Feishu Open Platform (WebSocket)
-    │
-bridge.mjs (always running)
-    │ normalizes event → JSON payload
-    │ calls your handler
-    ▼
-AGENT_HANDLER_CMD   ← runs a shell command (message JSON on stdin)
-  OR
-AGENT_HANDLER_WEBHOOK ← POSTs JSON to your server
-    │
-    ▼
-Your AI agent processes the message
-    │ optionally replies
-    ▼
-send.mjs → Feishu (reply threaded under original message)
+## Architecture
+
+```text
+Feishu IM event
+  -> bridge.mjs
+  -> normalized JSON payload
+  -> raft-handler.mjs
+  -> raft message send --target <target>
+  -> Raft agent / channel / DM
+
+Raft side outbound command
+  -> feishu-command.mjs
+  -> send.mjs / send-image.mjs / send-file.mjs
+  -> Feishu OpenAPI
 ```
 
-## Quick start
+`bridge.mjs` still supports generic command/webhook handlers, but the
+recommended Raft path is `raft-handler.mjs`.
 
-### 1. Create a Feishu app
+## Setup
 
-1. Go to [Feishu Open Platform](https://open.feishu.cn/app) → **Create custom app**
-2. Under **Add features**, enable **Bot**
-3. Under **Permissions & Scopes**, add:
-   - `im:message` (send messages)
-   - `im:message.receive_v1` (receive messages) — optional for contact lookup: `contact:user.base:readonly`
-4. Under **Event subscriptions** → set **Connection method** to **WebSocket (long connection)**
-5. Subscribe to the event: `im.message.receive_v1`
-6. Copy your **App ID** and **App Secret**
-
-### 2. Install and configure
+1. Create a Feishu custom app.
+2. Enable the bot and WebSocket event subscription.
+3. Add required scopes:
+   - `im:message`
+   - `im:message.receive_v1`
+   - optional: `contact:user.base:readonly`
+4. Run:
 
 ```bash
-git clone https://github.com/earayu/feishu-agent-bridge.git
-cd feishu-agent-bridge
 npm install
 npm run register
-# Follow the prompts to enter your App ID and App Secret
 ```
 
-### 3. Set your handler
+This writes `app.json`, which is ignored by git.
 
-**Option A — shell command** (message JSON delivered on stdin):
+## Raft External Agent Login
+
+Create or choose a Raft agent identity for inbound Feishu transport, then log it
+in on the machine running the bridge:
+
 ```bash
-export AGENT_HANDLER_CMD="bash /path/to/my-handler.sh"
+raft agent login \
+  --server https://api.raft.build \
+  --agent <agent-id> \
+  --profile-slug feishu-bridge
 ```
 
-**Option B — webhook** (bridge POSTs JSON to your server):
+After browser approval, verify:
+
 ```bash
-export AGENT_HANDLER_WEBHOOK="http://localhost:3456/feishu"
+raft agent login status \
+  --server https://api.raft.build \
+  --agent <agent-id> \
+  --profile-slug feishu-bridge
 ```
 
-**Option C — stdout** (no env var set, prints JSON to stdout — useful for testing):
+The bridge uses this profile:
+
 ```bash
-npm run bridge | jq .
+export RAFT_PROFILE=feishu-bridge
 ```
 
-### 4. Run the bridge
+## Run
+
+For Raft:
 
 ```bash
+export RAFT_PROFILE=feishu-bridge
+export BRIDGE_DEFAULT_TARGET='dm:@飞书'
+export AGENT_HANDLER_CMD='node ./raft-handler.mjs'
+npm run healthcheck
 npm run bridge
 ```
 
-The bridge reconnects automatically on disconnect.
+Or use the wrapper:
 
----
+```bash
+RAFT_PROFILE=feishu-bridge BRIDGE_DEFAULT_TARGET='dm:@飞书' npm start
+```
 
-## Message payload format
+On macOS, adapt `launchd.example.plist` and load it with `launchctl`.
 
-Your handler receives this JSON (via stdin or HTTP POST body):
+## Routing
+
+Create `routing.json` to map Feishu chat IDs to Raft targets:
+
+```json
+{
+  "oc_xxxxxxxxxxxxxxxxxxxx": "dm:@飞书",
+  "oc_yyyyyyyyyyyyyyyyyyyy": "#some-channel"
+}
+```
+
+Unmapped chats use `BRIDGE_DEFAULT_TARGET`.
+
+## State
+
+Runtime state is stored in `state/bridge-state.json` by default and is ignored by
+git. Override with:
+
+```bash
+export BRIDGE_STATE_DIR=/var/lib/raft-feishu-bridge
+```
+
+The state file contains:
+
+- recently seen Feishu message IDs for deduplication
+- Feishu message → Raft target mapping
+- attachment metadata
+- last dispatch health status
+
+## Health Checks
+
+Run:
+
+```bash
+npm run healthcheck
+```
+
+It validates `app.json`, production handler configuration, non-default Raft
+target, and Raft profile auth when applicable.
+
+Optional failure notification:
+
+```bash
+export BRIDGE_HEALTH_NOTIFY_TARGET='dm:@飞书'
+```
+
+`bridge.mjs` also records dispatch failures into the state file and can send a
+Raft notification through `BRIDGE_HEALTH_NOTIFY_TARGET`.
+
+## Feishu -> Raft Payload
+
+Handlers receive normalized JSON:
 
 ```json
 {
   "event": "message",
-  "target": "my-team-channel",
-  "chat_id": "oc_xxxxxxxxxxxxxxxxxxxx",
+  "target": "dm:@飞书",
+  "chat_id": "oc_xxx",
   "chat_type": "group",
-  "message_id": "om_xxxxxxxxxxxxxxxxxxxx",
-  "sender_open_id": "ou_xxxxxxxxxxxxxxxxxxxx",
+  "message_id": "om_xxx",
+  "sender_open_id": "ou_xxx",
   "sender_name": "张三",
-  "text": "Hello, what is the weather today?",
+  "text": "hello",
   "attachments": [
     {
       "kind": "image",
-      "local_path": "/tmp/feishu-bridge-attachments/1234567890-img_v2_xxx.jpg",
-      "filename": "img_v2_xxx.jpg",
-      "file_key": "img_v2_xxx"
+      "local_path": "/tmp/feishu-bridge-attachments/...",
+      "filename": "image.jpg",
+      "file_key": "img_xxx"
     }
   ],
-  "timestamp": "2026-05-02T14:00:00.000Z",
-  "raw": { ... }
+  "timestamp": "2026-07-09T00:00:00.000Z",
+  "raw": {}
 }
 ```
 
-**Attachment note**: Local files in `attachments[].local_path` are cleaned up after your handler exits unless `KEEP_ATTACHMENTS=1` is set.
+`raft-handler.mjs` uploads `attachments[].local_path` to Raft and includes the
+attachment IDs on the Raft message.
 
----
+## Raft -> Feishu Commands
 
-## Sending replies
-
-Use `send.mjs` to reply to Feishu from inside your handler:
+Prefer `feishu-command.mjs` as the structured outbound entrypoint:
 
 ```bash
-# Reply in the same thread (recommended — keeps context visible)
-node send.mjs --reply-to <om_message_id> --text "Here is your answer"
-
-# Or pipe from stdin
-echo "Here is your answer" | node send.mjs --reply-to <om_message_id> --stdin
-
-# Send to a specific chat
-node send.mjs --chat-id <oc_xxx> --text "Hello group"
-
-# DM a specific user
-node send.mjs --open-id <ou_xxx> --text "Hello"
+echo '{"action":"send_text","reply_to":"om_xxx","text":"收到"}' | node feishu-command.mjs
+echo '{"action":"send_image","reply_to":"om_xxx","path":"/tmp/chart.png"}' | node feishu-command.mjs
+echo '{"action":"send_file","chat_id":"oc_xxx","path":"/tmp/report.pdf"}' | node feishu-command.mjs
 ```
 
-### @-mention rewriting
+Low-level helpers remain available:
 
-`send.mjs` automatically rewrites `@name` tokens in the message body to Feishu's `<at user_id="ou_xxx">@name</at>` syntax, using a `contacts.json` lookup table. Create `contacts.json` in the project root:
+- `send.mjs` for text
+- `send-image.mjs` for inline images
+- `send-file.mjs` for files
+- `search.mjs` for Feishu history search
+- `context.mjs` for recent Feishu context
 
-```json
-{
-  "_comment": "Feishu contact map: name (or alias) -> open_id.",
-  "Alice":       "ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "alice":       "ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "Bob":         "ou_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-}
-```
-
-Then `"hello @Alice"` in `--text` becomes a real @-mention that pings Alice in Feishu. Underscore-prefixed keys (e.g. `_comment`) are ignored. Longest-match wins, so `@Alice` matches `Alice` and `@AliceChen` matches `AliceChen` if both are present. Pass `--no-at` to disable rewriting and keep `@name` as literal text.
-
----
-
-## Other helper scripts
-
-| Script | What it does |
-|---|---|
-| `send-file.mjs <path> <chat_id> [reply_to]` | Upload a file (PDF / docx / xlsx / etc.) and send/reply with it. |
-| `send-md-file.mjs <path> <chat_id> [file_type]` | Upload a Markdown file and emit the resulting `file_key`. |
-| `search.mjs --chat-id <oc_xxx> --query "<keyword>" [--limit 50] [--days 7]` | Keyword search within a Feishu chat's history (client-side filter over recent pages). |
-| `context.mjs --chat-id <oc_xxx> [--limit 20] [--before <om_xxx>]` | Pull recent messages from a Feishu chat as JSONL — useful for agent context windows. |
-
-Run via `npm run send-file` / `npm run search` / etc., or call `node <script>.mjs` directly.
-
----
-
-## Routing
-
-Create `routing.json` to map Feishu chat IDs to logical target names. The bridge passes the resolved target to your handler so you can route messages differently based on which chat they came from.
-
-```json
-{
-  "oc_xxxxxxxxxxxxxxxxxxxx": "engineering",
-  "oc_yyyyyyyyyyyyyyyyyyyy": "support"
-}
-```
-
-Chats not in `routing.json` get the value of `BRIDGE_DEFAULT_TARGET` (default: `"default"`).
-
----
-
-## Environment variables
+## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENT_HANDLER_CMD` | — | Shell command to run for each message (JSON on stdin) |
-| `AGENT_HANDLER_WEBHOOK` | — | URL to POST message JSON to |
-| `BRIDGE_DEFAULT_TARGET` | `default` | Fallback target for unmapped chat IDs |
-| `KEEP_ATTACHMENTS` | — | Set to `1` to skip auto-cleanup of downloaded attachment files |
+| `RAFT_PROFILE` | `feishu-bridge` in `start-bridge.sh` | Raft external-agent profile slug |
+| `RAFT_BIN` | `raft` from `PATH` | Raft CLI path |
+| `AGENT_HANDLER_CMD` | `node ./raft-handler.mjs` in `start-bridge.sh` | Command handler for inbound Feishu messages |
+| `AGENT_HANDLER_WEBHOOK` | unset | Alternative HTTP handler |
+| `BRIDGE_DEFAULT_TARGET` | `dm:@飞书` in `start-bridge.sh` | Fallback Raft target |
+| `BRIDGE_STATE_DIR` | `./state` | State directory |
+| `BRIDGE_HEALTH_NOTIFY_TARGET` | unset | Raft target for health failure notifications |
+| `KEEP_ATTACHMENTS` | unset | Set `1` to keep downloaded Feishu attachments |
 
----
+## Notes
 
-## Dedup across restarts
-
-Feishu's event delivery is at-least-once: after a network blip or a bridge crash, the platform may redeliver events you already handled. The bridge tracks recently-seen `message_id`s in memory (10 min TTL) and additionally persists them to `logs/bridge-seen-messages.json` so a restart does NOT replay events that were processed before the crash. Writes are debounced (~2 s) under message bursts to avoid disk pressure. No configuration needed — this is on by default.
-
----
-
-## Examples
-
-See the [`examples/`](./examples) directory:
-
-- [`examples/claude-code/handler.sh`](./examples/claude-code/handler.sh) — Handler for [Claude Code](https://docs.anthropic.com/claude-code) CLI
-- [`examples/webhook/server.js`](./examples/webhook/server.js) — HTTP webhook server template (customize for any agent)
-
----
-
-## Running as a background service
-
-### macOS (launchd)
-
-Create `~/Library/LaunchAgents/com.feishu-agent-bridge.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>             <string>com.feishu-agent-bridge</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/node</string>
-    <string>/path/to/feishu-agent-bridge/bridge.mjs</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>AGENT_HANDLER_CMD</key> <string>bash /path/to/handler.sh</string>
-  </dict>
-  <key>RunAtLoad</key>          <true/>
-  <key>KeepAlive</key>          <true/>
-  <key>StandardErrorPath</key>  <string>/path/to/feishu-agent-bridge/logs/bridge.log</string>
-</dict>
-</plist>
-```
-
-```bash
-launchctl load ~/Library/LaunchAgents/com.feishu-agent-bridge.plist
-```
-
-### Linux (systemd)
-
-```ini
-[Unit]
-Description=Feishu Agent Bridge
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/node /path/to/feishu-agent-bridge/bridge.mjs
-Environment=AGENT_HANDLER_CMD=bash /path/to/handler.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
----
-
-## Using with Slock
-
-[Slock](https://github.com/slockit/slock) is a collaboration platform where AI agents and humans share channels, DMs, and tasks. The bridge can give a Slock agent a Feishu inbox: every Feishu IM event becomes a message **into** Slock, and the agent uses Slock's outbound side (here, `node send.mjs`) to reply back into Feishu.
-
-**If you are a Slock agent reading this URL, this is the onboarding flow you should run a human through:**
-
-### 1. Clone and install on the machine the Slock daemon runs on
-
-```bash
-git clone https://github.com/earayu/feishu-agent-bridge.git
-cd feishu-agent-bridge
-npm install
-```
-
-The bridge needs to be a long-running process on the same machine as the Slock daemon, because it shells out to the local `slock` CLI to deliver each message.
-
-### 2. Create the Feishu app and register
-
-Ask the human to:
-- Open the [Feishu Open Platform](https://open.feishu.cn/app) and **Create custom app**.
-- Add **Bot** under features.
-- Enable scopes `im:message` (send) + `im:message.receive_v1` (receive). Optional but useful: `contact:user.base:readonly` (so the bridge can resolve sender names) and `im:message.group_msg` (group history — admin-approved).
-- Set **Event subscription connection mode** to **WebSocket (long connection)**.
-- Subscribe to `im.message.receive_v1`.
-- Copy the **App ID** and **App Secret**.
-
-Then run `npm run register` and paste them in. This writes `app.json` in the repo root.
-
-### 3. Wire `AGENT_HANDLER_CMD` to deliver into Slock
-
-The bridge's payload JSON carries `target` (resolved from `routing.json`), `chat_id`, `text`, attachments, etc. The simplest handler reads the JSON on stdin and shells `slock message send`:
-
-```bash
-# handler.sh
-#!/usr/bin/env bash
-set -euo pipefail
-payload="$(cat)"
-target="$(jq -r '.target' <<<"$payload")"
-text="$(jq -r '.text' <<<"$payload")"
-sender="$(jq -r '.sender_name // .sender_open_id' <<<"$payload")"
-slock message send --target "$target" <<EOF
-[Feishu] $sender: $text
-EOF
-```
-
-Then:
-
-```bash
-export AGENT_HANDLER_CMD="bash /path/to/handler.sh"
-```
-
-For attachments, the payload includes `attachments[].local_path`. Pass them to `slock attachment upload --path <local_path> --channel <target>` first, then include the returned attachment id in the `slock message send` call. (Leave `KEEP_ATTACHMENTS=1` if your handler is async, so the bridge doesn't delete the files before your handler finishes.)
-
-### 4. Configure `routing.json` (Feishu chat → Slock target)
-
-```json
-{
-  "_comment": "Feishu chat_id -> Slock target. DMs and channels both work.",
-  "oc_xxxxxxxxxxxxxxxxxxxx": "#engineering",
-  "oc_yyyyyyyyyyyyyyyyyyyy": "dm:@some-agent"
-}
-```
-
-Set `BRIDGE_DEFAULT_TARGET` to the agent's own DM (e.g. `dm:@feishu-bridge`) so unmapped chats still reach a human-watched inbox instead of `default`.
-
-### 5. Pitfall: don't use the agent's own slock token for delivery
-
-If the bridge runs as the same Slock agent identity that should be **woken** by inbound Feishu messages, the delivery breaks. The exact failure mode depends on the daemon version:
-
-- **Daemon ≥ 0.47.0**: `slock message send --target dm:@<self>` now returns `SEND_FAILED: Cannot create a DM with yourself`. The bridge gets an explicit error per message — fail-loud, but no messages flow.
-- **Older daemons**: the send "succeeded" silently but the recipient (which is the sender) was never woken, so messages black-holed without an error.
-
-Either way, the architectural fix is the same:
-
-- **Recommended — bridge as a separate Slock agent identity.** Create a dedicated `feishu-bridge` agent in Slock, hand its token to the bridge process, and route inbound to the *real* agent's DM (`BRIDGE_DEFAULT_TARGET=dm:@your-agent`).
-- **Or route to a channel** both the bridge agent and the real agent are members of. Channel writes wake other members (but not the author, so the bridge agent itself does not need to be woken).
-
-### 6. Verify
-
-Send yourself a Feishu DM to the bot. You should see it land in the configured Slock target within ~1 s. Reply via `node send.mjs --reply-to <om_xxx> --text "..."` from inside Slock — it should thread under the original in Feishu.
-
-### 7. Run under launchd / systemd
-
-Use the boilerplate in [Running as a background service](#running-as-a-background-service) above. Make sure the service's environment includes both `AGENT_HANDLER_CMD` and whatever Slock token / config files the `slock` CLI needs (typically `~/.slock/`).
-
----
-
-## License
-
-MIT
+- Do not commit `app.json`, `routing.json`, `state/`, or `logs/`.
+- The sender identity on Raft should be a dedicated external agent, not the
+  human-facing agent itself. That keeps provenance clear and avoids self-message
+  delivery ambiguity.
+- `raft agent bridge` is for external runtime wake adapters such as Hermes or
+  Claude Code channel plugins. The Feishu webhook path only needs
+  `raft-handler.mjs` plus the external-agent profile credential.

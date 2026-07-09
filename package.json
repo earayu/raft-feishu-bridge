@@ -1,11 +1,15 @@
 {
-  "name": "feishu-agent-bridge",
-  "version": "1.1.0",
-  "description": "Feishu (Lark) ↔ AI Agent bridge — forwards Feishu IM events to any agent framework via webhook or command handler",
+  "name": "raft-feishu-bridge",
+  "version": "1.2.0",
+  "description": "Feishu (Lark) ↔ Raft bridge — forwards Feishu IM events into Raft and centralizes Feishu outbound commands",
   "type": "module",
   "scripts": {
     "register": "node register.mjs",
     "bridge": "node bridge.mjs",
+    "start": "bash start-bridge.sh",
+    "healthcheck": "node healthcheck.mjs",
+    "raft-handler": "node raft-handler.mjs",
+    "feishu-command": "node feishu-command.mjs",
     "send": "node send.mjs",
     "send-file": "node send-file.mjs",
     "send-md-file": "node send-md-file.mjs",

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key> <string>ai.raft.feishu-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/path/to/raft-feishu-bridge/start-bridge.sh</string>
+  </array>
+  <key>WorkingDirectory</key> <string>/path/to/raft-feishu-bridge</string>
+  <key>RunAtLoad</key> <true/>
+  <key>KeepAlive</key> <true/>
+  <key>StandardOutPath</key> <string>/path/to/raft-feishu-bridge/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key> <string>/path/to/raft-feishu-bridge/logs/launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RAFT_PROFILE</key> <string>feishu-bridge</string>
+    <key>BRIDGE_DEFAULT_TARGET</key> <string>dm:@飞书</string>
+    <key>BRIDGE_HEALTH_NOTIFY_TARGET</key> <string>dm:@飞书</string>
+  </dict>
+</dict>
+</plist>

@@ -2,5 +2,6 @@ node_modules/
 app.json
 routing.json
 logs/
+state/
 *.log
 .env

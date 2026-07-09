@@ -61,9 +61,17 @@ if (!fileKey) {
 }
 console.log('Uploaded, file_key:', fileKey);
 
-// Send file message to chat
+// Send file message to chat or reply thread
 let res;
-if (chatId) {
+if (replyTo) {
+  res = await client.im.v1.message.reply({
+    path: { message_id: replyTo },
+    data: {
+      msg_type: 'file',
+      content: JSON.stringify({ file_key: fileKey }),
+    },
+  });
+} else if (chatId) {
   res = await client.im.v1.message.create({
     params: { receive_id_type: 'chat_id' },
     data: {
@@ -72,6 +80,9 @@ if (chatId) {
       content: JSON.stringify({ file_key: fileKey }),
     },
   });
+} else {
+  console.error('Send failed: must provide chat_id or reply_to');
+  process.exit(2);
 }
 
 if (res?.code && res.code !== 0) {
