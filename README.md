@@ -76,6 +76,8 @@ For Raft:
 ```bash
 export RAFT_PROFILE=feishu-bridge
 export BRIDGE_DEFAULT_TARGET='dm:@飞书'
+export BRIDGE_WAKE_HANDLE='@飞书'
+export BRIDGE_WAKE_NAMES='张一鸣'
 export AGENT_HANDLER_CMD='node ./raft-handler.mjs'
 npm run healthcheck
 npm run bridge
@@ -138,6 +140,38 @@ export BRIDGE_HEALTH_NOTIFY_TARGET='dm:@飞书'
 `bridge.mjs` also records dispatch failures into the state file and can send a
 Raft notification through `BRIDGE_HEALTH_NOTIFY_TARGET`.
 
+Raft uploads and message sends are retried with bounded backoff (immediately,
+then after 1s, 3s, and 10s). If the handler still fails, the bridge releases the
+message's deduplication reservation so a Feishu redelivery or operator replay
+is not silently discarded after a transient Raft restart.
+
+## Native wake mentions
+
+Feishu mentions use display names, while Raft wakeups use stable handles. Set:
+
+```bash
+export BRIDGE_WAKE_HANDLE='@飞书'
+export BRIDGE_WAKE_NAMES='张一鸣,Bridge Bot'
+```
+
+When the normalized Feishu text contains one of those display-name mentions,
+`raft-handler.mjs` prepends the native Raft handle. Ordinary group discussion
+is unchanged, but a message explicitly addressed to the agent remains a
+personal Raft mention even though the relay sender is another agent.
+
+## Split proxy configuration
+
+The Feishu SDK strips localhost proxy variables because they can cause redirect
+loops. If Raft itself needs a proxy (for example from mainland China), configure
+it separately:
+
+```bash
+export RAFT_HTTP_PROXY='http://127.0.0.1:8118'
+```
+
+The value is added only to child Raft CLI processes; it is not restored for the
+Feishu WebSocket/OpenAPI client.
+
 ## Feishu -> Raft Payload
 
 Handlers receive normalized JSON:
@@ -195,8 +229,11 @@ Low-level helpers remain available:
 | `AGENT_HANDLER_CMD` | `node ./raft-handler.mjs` in `start-bridge.sh` | Command handler for inbound Feishu messages |
 | `AGENT_HANDLER_WEBHOOK` | unset | Alternative HTTP handler |
 | `BRIDGE_DEFAULT_TARGET` | `dm:@飞书` in `start-bridge.sh` | Fallback Raft target |
+| `BRIDGE_WAKE_HANDLE` | `@飞书` in `start-bridge.sh` | Stable native Raft handle to prepend on an explicit Feishu mention |
+| `BRIDGE_WAKE_NAMES` | `张一鸣` in `start-bridge.sh` | Comma-separated Feishu display names that should trigger the native wake handle |
 | `BRIDGE_STATE_DIR` | `./state` | State directory |
 | `BRIDGE_HEALTH_NOTIFY_TARGET` | unset | Raft target for health failure notifications |
+| `RAFT_HTTP_PROXY` | unset | Proxy injected only into child Raft CLI processes |
 | `KEEP_ATTACHMENTS` | unset | Set `1` to keep downloaded Feishu attachments |
 
 ## Notes

@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { raftChildEnv } from './raft-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +28,10 @@ async function notify(message) {
   const target = process.env.BRIDGE_HEALTH_NOTIFY_TARGET;
   if (!target) return;
   const raft = process.env.RAFT_BIN || 'raft';
-  await run(raft, ['message', 'send', '--target', target], { input: message });
+  await run(raft, ['message', 'send', '--target', target], {
+    input: message,
+    env: raftChildEnv(),
+  });
 }
 
 async function main() {
@@ -51,7 +55,7 @@ async function main() {
 
   if (process.env.AGENT_HANDLER_CMD || process.env.RAFT_PROFILE) {
     const raft = process.env.RAFT_BIN || 'raft';
-    const who = await run(raft, ['auth', 'whoami']);
+    const who = await run(raft, ['profile', 'show'], { env: raftChildEnv() });
     if (!who.ok) failures.push(`raft auth failed: ${(who.stderr || who.stdout).trim()}`);
   }
 

@@ -14,7 +14,8 @@
     "send-file": "node send-file.mjs",
     "send-md-file": "node send-md-file.mjs",
     "search": "node search.mjs",
-    "context": "node context.mjs"
+    "context": "node context.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.61.1"
