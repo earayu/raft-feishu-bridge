@@ -7,6 +7,11 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import {
+  addNativeWakeMention,
+  raftChildEnv,
+  withRetry,
+} from './raft-utils.mjs';
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -36,13 +41,26 @@ function run(cmd, args, { input, env = process.env } = {}) {
 }
 
 function raftEnv() {
-  const env = { ...process.env };
+  const env = raftChildEnv();
   if (process.env.RAFT_PROFILE) env.RAFT_PROFILE = process.env.RAFT_PROFILE;
   return env;
 }
 
 function raftBin() {
   return process.env.RAFT_BIN || 'raft';
+}
+
+async function runRaftWithRetry(args, options = {}) {
+  return await withRetry(
+    () => run(raftBin(), args, { ...options, env: raftEnv() }),
+    {
+      onError: async (error, attempt, total) => {
+        process.stderr.write(
+          `raft-handler retry ${attempt}/${total} failed: ${error.message}\n`,
+        );
+      },
+    },
+  );
 }
 
 function extractAttachmentId(output) {
@@ -55,12 +73,13 @@ function messageBody(payload) {
     ? `${payload.sender_name} (\`${payload.sender_open_id || 'unknown'}\`)`
     : `\`${payload.sender_open_id || 'unknown'}\``;
   const chatKind = payload.chat_type || 'chat';
+  const text = addNativeWakeMention(payload.text || '[empty]');
   const lines = [
     `📨 来自飞书 (${chatKind} \`${payload.chat_id || 'unknown'}\`)`,
     `发件人: ${sender}`,
     `原消息: \`${payload.message_id || 'unknown'}\`  (回复用 \`node send.mjs --reply-to ${payload.message_id || '<om_xxx>'}\`)`,
     '',
-    payload.text || '[empty]',
+    text,
   ];
   return lines.join('\n');
 }
@@ -72,7 +91,7 @@ async function uploadAttachments(payload, target) {
     if (!localPath || !existsSync(localPath)) continue;
     const args = ['attachment', 'upload', '--path', localPath, '--target', target];
     if (attachment.mime_type) args.push('--mime-type', attachment.mime_type);
-    const res = await run(raftBin(), args, { env: raftEnv() });
+    const res = await runRaftWithRetry(args);
     const id = extractAttachmentId(`${res.stdout}\n${res.stderr}`);
     if (id) ids.push(id);
   }
@@ -86,7 +105,7 @@ async function main() {
   const attachmentIds = await uploadAttachments(payload, target);
   const args = ['message', 'send', '--target', target];
   for (const id of attachmentIds) args.push('--attachment-id', id);
-  const res = await run(raftBin(), args, { input: messageBody(payload), env: raftEnv() });
+  const res = await runRaftWithRetry(args, { input: messageBody(payload) });
   process.stdout.write((res.stdout || res.stderr).trim() + '\n');
 }
 

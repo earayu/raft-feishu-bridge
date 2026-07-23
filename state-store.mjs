@@ -50,6 +50,12 @@ export class JsonStateStore {
     return false;
   }
 
+  releaseSeen(messageId) {
+    if (!messageId || !this.state.seen_messages[messageId]) return;
+    delete this.state.seen_messages[messageId];
+    this.markDirty();
+  }
+
   recordInbound(payload) {
     const messageId = payload?.message_id;
     if (!messageId) return;
@@ -94,6 +100,10 @@ export class JsonStateStore {
   }
 
   async flush() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
     if (!this.dirty) return;
     await mkdir(path.dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(this.state, null, 2) + '\n', { mode: 0o600 });

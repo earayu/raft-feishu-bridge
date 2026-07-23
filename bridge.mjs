@@ -27,6 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { JsonStateStore } from './state-store.mjs';
+import { raftChildEnv } from './raft-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_FILE = path.join(__dirname, 'app.json');
@@ -251,7 +252,7 @@ function notifyHealthFailure(reason) {
   const body = `🚨 raft-feishu-bridge dispatch failure\n\n${reason}`;
   const child = spawn(RAFT_BIN, ['message', 'send', '--target', HEALTH_NOTIFY_TARGET], {
     stdio: ['pipe', 'ignore', 'ignore'],
-    env: process.env,
+    env: raftChildEnv(),
   });
   child.stdin.end(body);
 }
@@ -259,11 +260,13 @@ function notifyHealthFailure(reason) {
 // --- attachment local paths (passed in payload) ---
 async function handleReceive(client, routing, data) {
   const tmpFiles = [];
+  let currentMessageId = null;
   try {
     const msg = data?.message || {};
     const chatId = msg.chat_id || 'unknown';
     const chatType = msg.chat_type || '?';
     const messageId = msg.message_id;
+    currentMessageId = messageId;
 
     if (store.isDuplicate(messageId)) {
       await log('info', `dedup: skipping already-seen message_id=${messageId}`);
@@ -314,6 +317,10 @@ async function handleReceive(client, routing, data) {
     });
     await log('info', `dispatched chat=${chatId} target=${target} msg=${messageId} -> ${String(result).split('\n')[0]}`);
   } catch (e) {
+    if (currentMessageId) {
+      store.releaseSeen(currentMessageId);
+      await store.flush();
+    }
     store.recordHealthPatch({
       last_dispatch_failed_at: new Date().toISOString(),
       last_dispatch_error: e.message,
