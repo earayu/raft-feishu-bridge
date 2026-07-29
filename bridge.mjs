@@ -10,6 +10,11 @@
 //   AGENT_HANDLER_CMD      Shell command to run for each message (message JSON on stdin)
 //   AGENT_HANDLER_WEBHOOK  HTTP(S) URL to POST message JSON to
 //   BRIDGE_DEFAULT_TARGET  Fallback "target" string for chats not in routing.json (default: "default")
+//   BRIDGE_MUTED_CHATS     Comma-separated Feishu chat_ids to mute (no delivery)
+//
+// Mute (no Raft delivery) can also be configured in routing.json:
+//   "oc_xxx": "mute"           // per-chat sentinel (also: __mute__ | drop | discard)
+//   "_mute": ["oc_xxx", ...]   // bulk list (alias: _muted)
 //
 // The bridge never sends to Feishu — use send.mjs for outbound.
 
@@ -27,7 +32,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { JsonStateStore } from './state-store.mjs';
-import { raftChildEnv } from './raft-utils.mjs';
+import {
+  collectMutedChats,
+  isChatMuted,
+  isMuteTarget,
+  raftChildEnv,
+} from './raft-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_FILE = path.join(__dirname, 'app.json');
@@ -61,23 +71,31 @@ async function log(level, ...args) {
 // metadata keys for documentation purposes. They are stripped here so that
 // resolveTarget() only sees real chat_id -> target mappings. Real Feishu chat
 // IDs never start with `_`, so this is safe.
+// `_mute` / `_muted` arrays and mute-sentinel values are collected into a Set
+// so handleReceive can drop those chats before any download/dispatch work.
 async function loadRouting() {
-  if (!existsSync(ROUTING_FILE)) return {};
+  if (!existsSync(ROUTING_FILE)) {
+    return { routing: {}, muted: collectMutedChats({}, process.env) };
+  }
   try {
     const raw = JSON.parse(await readFile(ROUTING_FILE, 'utf8'));
-    const out = {};
+    const routing = {};
     for (const [k, v] of Object.entries(raw)) {
-      if (!k.startsWith('_') && typeof v === 'string') out[k] = v;
+      if (!k.startsWith('_') && typeof v === 'string') routing[k] = v;
     }
-    return out;
+    const muted = collectMutedChats(raw, process.env);
+    return { routing, muted };
   } catch (e) {
     await log('warn', 'routing.json parse error, using empty map:', e.message);
-    return {};
+    return { routing: {}, muted: collectMutedChats({}, process.env) };
   }
 }
 
 function resolveTarget(routing, chatId) {
-  return routing[chatId] || DEFAULT_TARGET;
+  const t = routing[chatId];
+  // Mute sentinels must never fall through as a real Raft target.
+  if (isMuteTarget(t)) return DEFAULT_TARGET;
+  return t || DEFAULT_TARGET;
 }
 
 // --- mention resolution ---
@@ -258,7 +276,7 @@ function notifyHealthFailure(reason) {
 }
 
 // --- attachment local paths (passed in payload) ---
-async function handleReceive(client, routing, data) {
+async function handleReceive(client, routing, mutedSet, data) {
   const tmpFiles = [];
   let currentMessageId = null;
   try {
@@ -267,6 +285,12 @@ async function handleReceive(client, routing, data) {
     const chatType = msg.chat_type || '?';
     const messageId = msg.message_id;
     currentMessageId = messageId;
+
+    // Mute first: no download, no state write, no handler dispatch.
+    if (isChatMuted(chatId, routing, mutedSet)) {
+      await log('info', `muted: skip delivery chat=${chatId} msg=${messageId}`);
+      return;
+    }
 
     if (store.isDuplicate(messageId)) {
       await log('info', `dedup: skipping already-seen message_id=${messageId}`);
@@ -344,7 +368,7 @@ async function main() {
     process.exit(1);
   }
   const { app_id, app_secret } = JSON.parse(await readFile(APP_FILE, 'utf8'));
-  const routing = await loadRouting();
+  const { routing, muted: mutedSet } = await loadRouting();
   await store.load();
 
   if (!HANDLER_CMD && !HANDLER_WEBHOOK) {
@@ -352,7 +376,10 @@ async function main() {
   }
 
   await log('info', `bridge starting. app_id=${app_id} default_target=${DEFAULT_TARGET} state_file=${STATE_FILE}`);
-  await log('info', `routing has ${Object.keys(routing).length} entries`);
+  await log('info', `routing has ${Object.keys(routing).length} entries, muted=${mutedSet.size}`);
+  if (mutedSet.size) {
+    await log('info', `muted chats: ${[...mutedSet].join(', ')}`);
+  }
   if (HANDLER_CMD) await log('info', `handler: CMD = ${HANDLER_CMD}`);
   if (HANDLER_WEBHOOK) await log('info', `handler: WEBHOOK = ${HANDLER_WEBHOOK}`);
 
@@ -369,7 +396,7 @@ async function main() {
   });
 
   const dispatcher = new lark.EventDispatcher({}).register({
-    'im.message.receive_v1': async (data) => handleReceive(apiClient, routing, data),
+    'im.message.receive_v1': async (data) => handleReceive(apiClient, routing, mutedSet, data),
   });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

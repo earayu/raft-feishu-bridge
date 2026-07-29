@@ -1,7 +1,13 @@
 {
   "_comment": "Map Feishu chat_id -> target string. The target is passed as-is to your handler.",
   "_comment2": "Copy this file to routing.json and fill in your chat IDs.",
+  "_comment3": "Mute: set a chat's target to \"mute\" (or __mute__|drop|discard), list ids under \"_mute\", or set BRIDGE_MUTED_CHATS. Muted chats are not delivered.",
 
   "oc_xxxxxxxxxxxxxxxxxxxx": "my-team-channel",
-  "oc_yyyyyyyyyyyyyyyyyyyy": "support-inbox"
+  "oc_yyyyyyyyyyyyyyyyyyyy": "support-inbox",
+  "oc_zzzzzzzzzzzzzzzzzzzz": "mute",
+
+  "_mute": [
+    "oc_aaaaaaaaaaaaaaaaaaaa"
+  ]
 }

@@ -7,6 +7,49 @@ const PROXY_KEYS = [
   'all_proxy',
 ];
 
+/** routing.json target values that mean "do not deliver to Raft". */
+export const MUTE_TARGETS = new Set(['mute', '__mute__', 'drop', 'discard']);
+
+export function isMuteTarget(target) {
+  return typeof target === 'string' && MUTE_TARGETS.has(target.trim().toLowerCase());
+}
+
+/**
+ * Collect muted Feishu chat_ids from env + routing.json document.
+ *
+ * Sources (union):
+ *   - BRIDGE_MUTED_CHATS env: comma-separated chat_ids
+ *   - routing.json "_mute" / "_muted" array
+ *   - routing entries whose value is a mute sentinel (mute|__mute__|drop|discard)
+ */
+export function collectMutedChats(routingDoc = {}, env = process.env) {
+  const muted = new Set();
+  for (const id of String(env.BRIDGE_MUTED_CHATS || '').split(',')) {
+    const t = id.trim();
+    if (t) muted.add(t);
+  }
+  for (const key of ['_mute', '_muted']) {
+    const list = routingDoc?.[key];
+    if (!Array.isArray(list)) continue;
+    for (const id of list) {
+      if (typeof id === 'string' && id.trim()) muted.add(id.trim());
+    }
+  }
+  if (routingDoc && typeof routingDoc === 'object') {
+    for (const [k, v] of Object.entries(routingDoc)) {
+      if (k.startsWith('_')) continue;
+      if (isMuteTarget(v)) muted.add(k);
+    }
+  }
+  return muted;
+}
+
+export function isChatMuted(chatId, routing = {}, mutedSet = new Set()) {
+  if (!chatId || chatId === 'unknown') return false;
+  if (mutedSet.has(chatId)) return true;
+  return isMuteTarget(routing[chatId]);
+}
+
 export function raftChildEnv(baseEnv = process.env) {
   const env = { ...baseEnv };
   const proxy = baseEnv.RAFT_HTTP_PROXY || '';

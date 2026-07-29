@@ -104,6 +104,29 @@ Create `routing.json` to map Feishu chat IDs to Raft targets:
 
 Unmapped chats use `BRIDGE_DEFAULT_TARGET`.
 
+## Mute (no delivery)
+
+When you need the bot to stay in a Feishu chat (or cannot leave yet) but **must
+not** wake Raft on every message, mute that chat. The bridge still receives the
+WebSocket event, logs `muted: skip delivery`, and returns — no attachment
+download, no handler dispatch, no Raft message.
+
+Three equivalent ways (union):
+
+```json
+{
+  "oc_noisy_group": "mute",
+  "_mute": ["oc_other_group"]
+}
+```
+
+```bash
+export BRIDGE_MUTED_CHATS='oc_noisy_group,oc_other_group'
+```
+
+Mute target sentinels (case-insensitive): `mute`, `__mute__`, `drop`, `discard`.
+Restart the bridge after changing mute config (same as routing changes).
+
 ## State
 
 Runtime state is stored in `state/bridge-state.json` by default and is ignored by

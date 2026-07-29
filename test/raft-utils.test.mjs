@@ -2,9 +2,48 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   addNativeWakeMention,
+  collectMutedChats,
+  isChatMuted,
+  isMuteTarget,
   raftChildEnv,
   withRetry,
 } from '../raft-utils.mjs';
+
+test('isMuteTarget recognizes mute sentinels case-insensitively', () => {
+  assert.equal(isMuteTarget('mute'), true);
+  assert.equal(isMuteTarget('MUTE'), true);
+  assert.equal(isMuteTarget('__mute__'), true);
+  assert.equal(isMuteTarget('drop'), true);
+  assert.equal(isMuteTarget('discard'), true);
+  assert.equal(isMuteTarget('dm:@飞书'), false);
+  assert.equal(isMuteTarget(null), false);
+});
+
+test('collectMutedChats unions env, _mute list, and mute-target entries', () => {
+  const muted = collectMutedChats(
+    {
+      _mute: ['oc_from_list'],
+      _muted: ['oc_from_alias'],
+      oc_mapped: 'mute',
+      oc_live: 'dm:@飞书',
+      _comment: 'ignored',
+    },
+    { BRIDGE_MUTED_CHATS: 'oc_from_env, oc_from_list' },
+  );
+  assert.deepEqual(
+    [...muted].sort(),
+    ['oc_from_alias', 'oc_from_env', 'oc_from_list', 'oc_mapped'].sort(),
+  );
+});
+
+test('isChatMuted checks set and routing sentinel', () => {
+  const muted = new Set(['oc_a']);
+  const routing = { oc_b: 'mute', oc_c: 'dm:@x' };
+  assert.equal(isChatMuted('oc_a', routing, muted), true);
+  assert.equal(isChatMuted('oc_b', routing, muted), true);
+  assert.equal(isChatMuted('oc_c', routing, muted), false);
+  assert.equal(isChatMuted('unknown', routing, muted), false);
+});
 
 test('adds a stable Raft handle for a configured Feishu display-name mention', () => {
   assert.equal(
