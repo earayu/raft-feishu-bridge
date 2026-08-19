@@ -129,6 +129,11 @@ Restart the bridge after changing mute config (same as routing changes).
 
 ## State
 
+Dedup of inbound Feishu `message_id`s uses `BRIDGE_SEEN_TTL_MS` (default seven
+days). Feishu may redeliver the same event after brief disconnects; a short TTL
+(for example ten minutes) will treat those redeliveries as new and wake the
+consumer again on old content.
+
 Runtime state is stored in `state/bridge-state.json` by default and is ignored by
 git. Override with:
 
@@ -254,6 +259,7 @@ Low-level helpers remain available:
 | `BRIDGE_DEFAULT_TARGET` | `dm:@飞书` in `start-bridge.sh` | Fallback Raft target |
 | `BRIDGE_WAKE_HANDLE` | `@飞书` in `start-bridge.sh` | Stable native Raft handle to prepend on an explicit Feishu mention |
 | `BRIDGE_WAKE_NAMES` | `张一鸣` in `start-bridge.sh` | Comma-separated Feishu display names that should trigger the native wake handle |
+| `BRIDGE_SEEN_TTL_MS` | `604800000` (7d) | How long Feishu `message_id`s stay in the dedup set. Too short (old default 10m) lets Feishu redeliveries wake agents on stale messages. |
 | `BRIDGE_STATE_DIR` | `./state` | State directory |
 | `BRIDGE_HEALTH_NOTIFY_TARGET` | unset | Raft target for health failure notifications |
 | `RAFT_HTTP_PROXY` | unset | Proxy injected only into child Raft CLI processes |
