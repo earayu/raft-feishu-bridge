@@ -52,7 +52,8 @@ const HANDLER_CMD = process.env.AGENT_HANDLER_CMD;
 const HANDLER_WEBHOOK = process.env.AGENT_HANDLER_WEBHOOK;
 const HEALTH_NOTIFY_TARGET = process.env.BRIDGE_HEALTH_NOTIFY_TARGET;
 const RAFT_BIN = process.env.RAFT_BIN || 'raft';
-const store = new JsonStateStore(STATE_FILE);
+const SEEN_TTL_MS = Number(process.env.BRIDGE_SEEN_TTL_MS || String(7 * 24 * 60 * 60 * 1000));
+const store = new JsonStateStore(STATE_FILE, { seenTtlMs: SEEN_TTL_MS });
 
 // --- logging ---
 async function log(level, ...args) {

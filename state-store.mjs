@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 export class JsonStateStore {
-  constructor(filePath, { seenTtlMs = 10 * 60 * 1000, flushDelayMs = 2000 } = {}) {
+  constructor(filePath, { seenTtlMs = 7 * 24 * 60 * 60 * 1000, flushDelayMs = 2000 } = {}) {
     this.filePath = filePath;
     this.seenTtlMs = seenTtlMs;
     this.flushDelayMs = flushDelayMs;
